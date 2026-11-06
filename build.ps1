@@ -15,6 +15,11 @@ if ($LASTEXITCODE) { throw "PyInstaller başarısız" }
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") |
     Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) { throw "Inno Setup bulunamadı: winget install JRSoftware.InnoSetup" }
-& $iscc /Q installer.iss
-if ($LASTEXITCODE) { throw "Inno Setup başarısız" }
+# Antivirüs yeni exe'yi kısa süre kilitleyebiliyor ("Resource update error"): birkaç kez dene.
+for ($i = 1; $i -le 3; $i++) {
+    & $iscc /Q installer.iss
+    if (-not $LASTEXITCODE) { break }
+    if ($i -eq 3) { throw "Inno Setup başarısız" }
+    Start-Sleep 10
+}
 Write-Host "Hazır: $(Resolve-Path 'Output\PDF Studyo Kurulum.exe')"
