@@ -174,11 +174,11 @@ async function handleResult(r, opt) {
 }
 
 /* ------------------------------------------------------------------ bildirimler */
-function toast(text, { error = false, acts = [], long = false } = {}) {
+function toast(text, { error = false, acts = [], long = false, sticky = false } = {}) {
   const t = el("div", { class: "toast" + (error ? " err" : ""), role: error ? "alert" : "status" }, el("div", {}, text));
   if (acts.length) t.append(el("div", { class: "acts" }, acts.map(([l, f]) => el("button", { onclick: () => { f(); t.remove(); } }, l))));
   $("#toasts").append(t);
-  setTimeout(() => t.remove(), error ? 9000 : long ? 9000 : 4500);
+  if (!sticky) setTimeout(() => t.remove(), error ? 9000 : long ? 9000 : 4500);
 }
 
 function jobCard(label, onCancel) {
@@ -1645,7 +1645,22 @@ async function uploadFile(file) {
 }
 
 /* ------------------------------------------------------------------ başlat */
+/* ------------------------------------------------------------------ güncelleme */
+async function checkUpdate() {
+  const r = await run("update_check", {}, { raw: true, quiet: true });
+  if (!r || !r.available) return;
+  toast(`PDF Stüdyo ${r.version} hazır (şu an ${r.current}).`, { sticky: true, acts: [["Güncelle", doUpdate], ["Sonra", () => {}]] });
+}
+
+async function doUpdate() {
+  if (!(await guardDirty())) return;
+  if (!(await confirmBox("Güncellensin mi?", "Yeni sürüm indirilip eski sürümün üzerine kurulur; ayarların ve imzaların korunur. PDF Stüdyo kapanıp birkaç saniye içinde yeniden açılır.", "Güncelle"))) return;
+  const r = await run("update_install", {}, { label: "Güncelleme indiriliyor" });
+  if (r && r.message && r.message.includes("kuruluyor")) setTimeout(() => window.close(), 1200);
+}
+
 function init() {
+  setTimeout(checkUpdate, 4000);
   $("#homeBtn").innerHTML = icon("home");
   $("#paletteBtn").innerHTML = icon("search");
   $("#undoBtn").innerHTML = icon("undo");

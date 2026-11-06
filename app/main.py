@@ -16,10 +16,33 @@ from ops_ai import AI_OPS
 from ops_local import LOCAL_OPS, find_edge
 from ops_sign import SIGN_OPS
 
-OPS = {**LOCAL_OPS, **AI_OPS, **SIGN_OPS}
+def op_update_check(s, a, job):
+    import guncelle
+    try:
+        info = guncelle.check("pdf-studyo", APP_VERSION)
+    except Exception:
+        return {"available": False, "current": APP_VERSION}
+    return {"available": bool(info), "current": APP_VERSION, **(info or {})}
+
+
+def op_update_install(s, a, job):
+    """Yeni sürümü indirip eski sürümün üzerine kurar; kurulum bitince PDF Stüdyo yeniden açılır."""
+    import guncelle
+    info = guncelle.check("pdf-studyo", APP_VERSION)
+    if not info:
+        raise UserError("Zaten en son sürümü kullanıyorsun.")
+    path = guncelle.download(info, lambda f: job.update(0.05 + 0.9 * f, f"İndiriliyor… %{int(f * 100)}"))
+    if not getattr(sys, "frozen", False):
+        return {"message": f"Geliştirme sürümü: kurulum indirildi ama çalıştırılmadı ({path})."}
+    guncelle.install(path, restart=[sys.executable])
+    threading.Timer(1.5, lambda: os._exit(0)).start()
+    return {"message": f"{info['version']} kuruluyor; PDF Stüdyo birazdan yeniden açılacak."}
+
+
+OPS = {**LOCAL_OPS, **AI_OPS, **SIGN_OPS, "update_check": op_update_check, "update_install": op_update_install}
 # Hızlı ve pencere açmayan işler istekte hemen yanıtlanır; gerisi arka plan işi olur.
 SYNC = {"words", "page_text", "undo", "redo", "annots", "fields", "page_images", "signatures", "delete_signature",
-        "ai_key_status", "cert_status", "access_check", "to_text_local", "search", "signature_png"}
+        "ai_key_status", "cert_status", "access_check", "to_text_local", "search", "signature_png", "update_check"}
 
 TOKEN = secrets.token_urlsafe(24)
 STATIC = resource("static")
