@@ -79,9 +79,10 @@ def call(content=None, system="", schema=None, effort="medium", max_tokens=48000
     kwargs = dict(model=MODEL, max_tokens=max_tokens, system=system,
                   messages=messages or [{"role": "user", "content": content}],
                   output_config=output_config, betas=["server-side-fallback-2026-07-01"], fallbacks="default")
-    written = 0
     lo, hi = progress
-    with cl.beta.messages.stream(**kwargs) as stream:
+
+    def consume(stream):
+        written = 0
         for event in stream:
             if event.type == "content_block_delta" and getattr(event.delta, "type", "") == "text_delta":
                 written += len(event.delta.text)
@@ -89,7 +90,20 @@ def call(content=None, system="", schema=None, effort="medium", max_tokens=48000
                     job.update(lo + (hi - lo) * min(0.95, written / 6000), f"{label}… ({written} karakter)")
             elif job:
                 job.update(None, None)    # iptal edildiyse burada durur
-        msg = stream.get_final_message()
+        return stream.get_final_message()
+
+    import anthropic
+    try:
+        with cl.beta.messages.stream(**kwargs) as stream:
+            msg = consume(stream)
+    except anthropic.BadRequestError as e:
+        # Yedek model özelliği bu hesapta ya da modelde kabul edilmezse aynı isteği onsuz bir kez dene.
+        if "fallback" not in str(e).lower() and "beta" not in str(e).lower():
+            raise
+        kwargs.pop("betas")
+        kwargs.pop("fallbacks")
+        with cl.messages.stream(**kwargs) as stream:
+            msg = consume(stream)
     USAGE["calls"] += 1
     USAGE["input"] += (msg.usage.input_tokens or 0) + (getattr(msg.usage, "cache_read_input_tokens", 0) or 0) \
         + (getattr(msg.usage, "cache_creation_input_tokens", 0) or 0)
