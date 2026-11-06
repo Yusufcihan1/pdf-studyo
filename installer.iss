@@ -1,6 +1,6 @@
 ﻿#define AppName "PDF Stüdyo"
 #define AppExe "PDF Studyo.exe"
-#define AppVersion "1.0.3"
+#define AppVersion "1.0.4"
 
 [Setup]
 AppId={{A8E5C0D2-7B41-4E9A-9F3D-5C2B8E1F4A70}

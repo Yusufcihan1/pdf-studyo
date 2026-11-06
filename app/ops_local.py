@@ -11,6 +11,7 @@ import time
 import pymupdf
 from PIL import Image
 
+from textedit import rewrite_line
 from core import (SESSION, UserError, fix_fonts, to_bytes, ask_folder, ask_open, ask_open_many, ask_save, bytes_size, ensure_font,
                   fit_text, hex_to_rgb, load_settings, parse_pages, save_settings, SIGN_DIR, stem, FONT_REGULAR,
                   EMBED_FONT)
@@ -349,7 +350,7 @@ def content_box(page):
     return box if not box.is_empty else pymupdf.Rect()
 
 
-def fit_groups(doc, groups, drop=()):
+def fit_groups(doc, groups, drop=(), scales=None):
     """Her sayfa grubunu tek sayfaya sığdırır: içerikler alt alta dizilir ve gerekirse orantılı küçültülür.
     groups: 0 tabanlı sayfa numarası listeleri; listede olmayan sayfalar olduğu gibi kalır. drop: silinecekler."""
     first_of = {g[0]: g for g in groups if g}
@@ -378,6 +379,8 @@ def fit_groups(doc, groups, drop=()):
         avail_h = base.height - bottom_margin
         total_h = sum(c.height for _, c in clips)
         scale = min(1.0, avail_h / total_h) if total_h else 1.0
+        if scales is not None:
+            scales.append((g, scale))
         new = out.new_page(width=base.width, height=base.height)
         width = base.width * scale
         x0 = (base.width - width) / 2
@@ -412,9 +415,20 @@ def op_fit_one_page(s, a, job):
     groups = a.get("groups")
     if isinstance(groups, str) or groups is None:
         groups = parse_groups(groups or f"1-{doc.page_count}", doc.page_count)
-    out = fit_groups(doc, groups)
+    scales = []
+    out = fit_groups(doc, groups, scales=scales)
     s.replace_with(out.tobytes(garbage=3, deflate=True))
-    return {"changed": True, "message": f"{sum(1 for g in groups if len(g) > 1)} grup tek sayfaya sığdırıldı."}
+    msg = f"{sum(1 for g in groups if len(g) > 1)} grup tek sayfaya sığdırıldı."
+    return {"changed": True, "message": msg + small_fit_warning(scales)}
+
+
+def small_fit_warning(scales):
+    """Sığdırırken çok küçülen grupları söyler: yazı okunamayacak kadar küçülmüş olabilir."""
+    small = [(g, sc) for g, sc in scales if sc < 0.7]
+    if not small:
+        return ""
+    parts = ", ".join(f"s. {g[0] + 1}–{g[-1] + 1} (%{round(sc * 100)})" for g, sc in small[:5])
+    return f" Dikkat: {parts} çok küçüldü, yazı zor okunabilir; içeriği kısaltmak daha iyi olabilir."
 
 
 # ---------------------------------------------------------------- metin ve görsel düzenleme
@@ -463,45 +477,6 @@ def line_at(page, rect):
 
 def line_text(line):
     return _norm("".join(sp["text"] for sp in line["spans"]))
-
-
-def rewrite_line(page, line, new_text):
-    """Bir satırı silip değiştirilmiş hâliyle aynı yerden, aynı boyda yeniden yazar (gerekirse biraz küçültür)."""
-    spans = [sp for sp in line["spans"] if sp["text"].strip()] or line["spans"]
-    size = spans[0]["size"]
-    c = spans[0]["color"]
-    color = ((c >> 16 & 255) / 255, (c >> 8 & 255) / 255, (c & 255) / 255)
-    lr = pymupdf.Rect(line["bbox"])
-    # sağa ne kadar uzayabilir: aynı hizadaki bir sonraki yazıya ya da sayfa kenarına kadar
-    limit = page.rect.width - 30
-    for w in page.get_text("words"):
-        wr = pymupdf.Rect(w[:4])
-        if wr.x0 > lr.x1 + 1 and wr.y1 > lr.y0 + 1 and wr.y0 < lr.y1 - 1:
-            limit = min(limit, wr.x0 - 3)
-    font = pymupdf.Font(fontfile=FONT_REGULAR)
-    width = font.text_length(new_text, size)
-    room = max(lr.width, limit - lr.x0)
-    if width > room:
-        size = size * room / width
-    origin = pymupdf.Point(spans[0]["origin"])
-    red = lr * page.derotation_matrix if page.rotation else lr
-    page.add_redact_annot(red.normalize(), fill=False)
-    page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE, graphics=pymupdf.PDF_REDACT_LINE_ART_NONE)
-    if page.rotation:
-        origin = origin * page.derotation_matrix
-    page.insert_text(origin, new_text, fontsize=size, fontname=ensure_font(page), color=color, rotate=page.rotation)
-
-
-def replace_phrase(page, hit, find, replace):
-    """Bulunan ifadeyi satırı yeniden yazarak değiştirir; satır bulunamazsa kutuya yazar."""
-    line = line_at(page, hit)
-    if line:
-        text = line_text(line)
-        f = _norm(find)
-        if f in text:
-            rewrite_line(page, line, text.replace(f, replace, 1))
-            return
-    replace_in_rect(page, hit * page.derotation_matrix if page.rotation else hit, replace)
 
 
 def op_replace_text(s, a, job):

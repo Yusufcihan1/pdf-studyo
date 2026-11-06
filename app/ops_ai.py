@@ -12,7 +12,7 @@ import pymupdf
 
 from core import (SESSION, UserError, fix_fonts, to_bytes, ask_open_many, ask_save, ensure_font, fit_text, load_settings, save_settings,
                   stem, FONT_REGULAR, page_text_lines)
-from ops_local import (R, add_widget, apply_redactions, html_to_pdf, list_fields, replace_phrase, set_field_values,
+from ops_local import (R, add_widget, apply_redactions, html_to_pdf, list_fields, set_field_values,
                        _as_pdf)
 
 MODEL = "claude-sonnet-5-5"
@@ -649,7 +649,8 @@ def op_ai_chat(s, a, job):
     system = ("You answer questions about the user's documents. Base answers only on the documents and cite them. "
               "If the answer is not in the documents, say so plainly. Be concise. "
               "You cannot change the document from this chat. If the user asks for an edit (change text, make each "
-              "CV/item fit on one page, delete or rotate pages), say that 'Komutla düzenle' (Düzenle sekmesi) does it, "
+              "CV/item fit on one page, delete, rotate or reorder pages, add page numbers, header or watermark, "
+              "highlight or redact text), say that 'Komutla düzenle' (Düzenle sekmesi) does it, "
               "and give the exact command to paste there. Never claim you changed the document. " + TR)
     try:
         msg = call(system=system, messages=s.chat, effort="medium", job=job, label="Cevap yazılıyor")
@@ -701,12 +702,72 @@ def op_ai_translate_text(s, a, job):
     return {"text": data["text"]}
 
 
+PAGE_ACTIONS = ["fit_one_page", "delete", "rotate", "reorder", "insert_blank", "page_numbers", "header", "footer",
+                "watermark", "highlight", "redact", "resize_a4", "compress"]
+POSITIONS = ["", "top-left", "top-center", "top-right", "bottom-left", "bottom-center", "bottom-right"]
 CHANGE_SCHEMA = S({
-    "changes": arr(S({"page": INT, "find": STR, "replace": STR, "reason": STR})),
-    "page_actions": arr(S({"action": {"type": "string", "enum": ["fit_one_page", "delete", "rotate"]},
-                           "pages": arr(INT), "angle": INT, "reason": STR})),
+    "changes": arr(S({"page": INT, "find": STR, "replace": STR, "all_pages": {"type": "boolean"}, "reason": STR})),
+    "page_actions": arr(S({"action": {"type": "string", "enum": PAGE_ACTIONS}, "pages": arr(INT), "angle": INT,
+                           "text": STR, "position": {"type": "string", "enum": POSITIONS}, "reason": STR})),
     "note": STR})
-ACTION_TR = {"fit_one_page": "Tek sayfaya sığdır", "delete": "Sil", "rotate": "Döndür"}
+ACTION_TR = {"fit_one_page": "Tek sayfaya sığdır", "delete": "Sil", "rotate": "Döndür", "reorder": "Sayfa sırası",
+             "insert_blank": "Boş sayfa ekle", "page_numbers": "Sayfa numarası", "header": "Üst bilgi",
+             "footer": "Alt bilgi", "watermark": "Filigran", "highlight": "Vurgula", "redact": "Karart",
+             "resize_a4": "Sayfaları A4 yap", "compress": "Dosyayı sıkıştır"}
+
+COMMAND_PROMPT = """Turn the instruction into edits of two kinds.
+
+1) 'changes': text edits. Each has:
+   - page: 1-based page number; find: text copied EXACTLY from that page. It may span several lines (copy the lines in
+     order, separated by single spaces) - e.g. a whole paragraph to rewrite it.
+   - replace: the new text. Use a newline character for line breaks. To ADD a new line, find the line it goes under
+     and replace it with that same line + newline + the new line. To delete text, replace with "".
+   - all_pages: true to change it on every page where it appears (then page is the first such page), else false.
+   Make 'find' long enough to be unique on its page: every occurrence on the page is changed.
+   Formatting (font, bold, size, colour) of the surrounding text is kept automatically; do not add markup.
+2) 'page_actions' (pages are 1-based numbers of the CURRENT document; [] means all pages where allowed):
+   - fit_one_page: the listed consecutive pages are ONE item that overflowed (one CV, letter or form spread over 2+
+     pages); they are merged onto one page, scaled down if needed. Work out where each item starts (a new name/title/
+     header) and make one action per item that spans 2+ pages.
+   - delete: remove the listed pages.
+   - rotate: rotate the listed pages by angle (90, 180, 270).
+   - reorder: pages = the complete new order of all pages (e.g. to sort CVs by name, list each item's pages in order).
+   - insert_blank: a blank page after each listed page (0 = at the very beginning).
+   - page_numbers: text = format using {n} and {total} (e.g. "{n} / {total}", "Sayfa {n}"); position; pages.
+   - header / footer: text (may use {n}, {total}, {tarih}); position (only its left/center/right part is used).
+   - watermark: text (e.g. "GİZLİ", "TASLAK"); pages.
+   - highlight: text = exact phrase to highlight in yellow; pages ([] = everywhere).
+   - redact: text = exact sensitive text to black out permanently; pages ([] = everywhere). One action per value.
+   - resize_a4: make all pages A4.
+   - compress: shrink the file size.
+   Unused fields: angle 0, text "", position "", pages [].
+Only do what the instruction asks; leave a list empty when not needed. reason: one short Turkish phrase.
+note: a short Turkish note if part of the request cannot be done with these tools (e.g. moving pictures, changing
+colours, editing the text of scanned pages, setting a password), else ""."""
+
+
+def _action_label(act, pages, n):
+    kind = act["action"]
+    name = ACTION_TR[kind]
+    text = (act.get("text") or "").strip()
+    if kind == "rotate":
+        name += f" ({act.get('angle') or 90}°)"
+    if kind == "reorder":
+        return f"{name}: " + ", ".join(str(p + 1) for p in pages[:12]) + ("…" if len(pages) > 12 else "")
+    if kind == "insert_blank":
+        return f"{name}: " + ", ".join("başa" if p < 0 else f"s. {p + 1} sonrası" for p in pages)
+    if kind in ("resize_a4", "compress"):
+        return name
+    if text:
+        name += f": «{text[:40]}»"
+    if not pages or len(pages) == n:
+        return name + " (tüm sayfalar)"
+    return f"{name}: s. {pages[0] + 1}" + (f"–{pages[-1] + 1}" if len(pages) > 1 else "")
+
+
+def _count_text(doc, find, pages):
+    from textedit import find_matches
+    return sum(len(find_matches(doc[p], find)) for p in pages)
 
 
 def op_ai_command(s, a, job):
@@ -715,85 +776,193 @@ def op_ai_command(s, a, job):
     if not instruction:
         raise UserError("Ne yapılacağını yaz.")
     text = page_text_lines(doc, max_chars=600000)
-    data = call([{"type": "text", "text":
-                  f"The document has {doc.page_count} pages. Document text by page:\n{text}\n\n"
-                  f"User instruction: {instruction}\n\n"
-                  "Turn the instruction into edits of two kinds:\n"
-                  "1) 'changes': exact text replacements. Each: page number, 'find' = text copied EXACTLY as it appears "
-                  "on that page within one line (short and unique enough to locate), 'replace' = new text.\n"
-                  "2) 'page_actions': layout operations on 1-based page numbers.\n"
-                  "   - fit_one_page: the listed consecutive pages are ONE item that overflowed (e.g. one CV, letter or "
-                  "form spread over 2+ pages); they are merged onto a single page, scaled down if needed. Work out where "
-                  "each item starts (a new name/title/header) and make one action per item that spans 2+ pages. "
-                  "Use this when the user wants things to fit on one page each.\n"
-                  "   - delete: remove the listed pages.\n"
-                  "   - rotate: rotate the listed pages by 'angle' (90, 180, 270).\n"
-                  "   'angle' is 0 for non-rotate actions.\n"
-                  "Only do what the instruction asks; leave a list empty when not needed. reason: one short Turkish "
-                  "phrase. note: a short Turkish note if part of the request cannot be done with these tools, else \"\"."}],
-                schema=CHANGE_SCHEMA, effort="high", job=job, label="Değişiklikler hazırlanıyor")
+    scanned = s.scanned_pages()
+    content = []
+    if scanned:
+        content.append(pdf_block(doc, scanned[:50]))
+        content.append({"type": "text", "text": "The attached PDF shows the scanned pages "
+                        + ", ".join(str(p + 1) for p in scanned[:50]) + " (in that order). They are images without a "
+                        "text layer: use them for page actions; their text cannot be edited, highlighted or redacted."})
+    content.append({"type": "text", "text": f"The document has {doc.page_count} pages. Document text by page:\n{text}\n\n"
+                    f"User instruction: {instruction}\n\n{COMMAND_PROMPT}"})
+    data = call(content, schema=CHANGE_SCHEMA, effort="high", job=job, label="Değişiklikler hazırlanıyor")
+    n = doc.page_count
     changes = []
     for c in data["changes"]:
         p = c["page"] - 1
-        if 0 <= p < doc.page_count:
-            hits = doc[p].search_for(c["find"])
-            changes.append({**c, "kind": "text", "page": p, "found": len(hits)})
-    for act in data.get("page_actions", []):
-        pages = sorted({p - 1 for p in act["pages"] if 1 <= p <= doc.page_count})
-        if not pages or (act["action"] == "fit_one_page" and len(pages) < 2):
+        if not (0 <= p < n) or not c["find"].strip():
             continue
-        if act["action"] == "fit_one_page":
+        where = list(range(n)) if c.get("all_pages") else [p]
+        changes.append({**c, "kind": "text", "page": p, "all": bool(c.get("all_pages")),
+                        "found": _count_text(doc, c["find"], where), "scanned": p in scanned})
+    for act in data.get("page_actions", []):
+        kind = act["action"]
+        low = -1 if kind == "insert_blank" else 0
+        pages = [p - 1 for p in act["pages"] if low <= p - 1 < n]
+        pages = list(dict.fromkeys(pages)) if kind == "reorder" else sorted(set(pages))
+        text_ = (act.get("text") or "").strip()
+        if kind == "fit_one_page":
+            if len(pages) < 2:
+                continue
             pages = list(range(pages[0], pages[-1] + 1))     # yalnız ardışık sayfalar birleşir
-        label = ACTION_TR[act["action"]] + (f" ({act['angle']}°)" if act["action"] == "rotate" else "")
-        rng = f"s. {pages[0] + 1}" + (f"–{pages[-1] + 1}" if len(pages) > 1 else "")
-        changes.append({"kind": "page", "action": act["action"], "pages": pages, "angle": act.get("angle", 0),
-                        "reason": act["reason"], "label": f"{label}: {rng}", "page": pages[0], "found": 1})
-    return {"changes": changes, "note": data["note"]}
+        if kind in ("delete", "rotate", "insert_blank", "reorder") and not pages:
+            continue
+        if kind == "reorder" and pages + [p for p in range(n) if p not in pages] == list(range(n)):
+            continue                                       # sıra değişmiyor
+        if kind in ("header", "footer", "watermark", "highlight", "redact") and not text_:
+            continue
+        found = _count_text(doc, text_, pages or range(n)) if kind in ("highlight", "redact") else 1
+        changes.append({"kind": "page", "action": kind, "pages": pages, "angle": act.get("angle", 0), "text": text_,
+                        "position": act.get("position") or "", "reason": act["reason"],
+                        "label": _action_label(act, pages, n), "page": max(0, pages[0]) if pages else 0, "found": found})
+    note = data["note"]
+    if any(c.get("scanned") for c in changes):
+        note = (note + " " if note else "") + "Taranmış sayfalardaki yazı değiştirilemez; önce “Aranabilir PDF yap”."
+    return {"changes": changes, "note": note, "scanned": [p + 1 for p in scanned]}
+
+
+class _Draft:
+    """Yerel işlemleri (sayfa numarası, filigran…) tek bir geri alma adımında birleştirmek için taslak oturum."""
+
+    def __init__(self, doc):
+        self.doc = doc
+
+    def require(self):
+        return self.doc
+
+    def commit(self):
+        pass
+
+    def replace_with(self, data, name=None):
+        self.doc = pymupdf.open(stream=data, filetype="pdf")
 
 
 def op_apply_changes(s, a, job):
-    from ops_local import fit_groups
+    from ops_local import fit_groups, small_fit_warning, op_page_numbers, op_header_footer, op_watermark, op_resize
+    from textedit import replace_text
     doc = s.require()
-    applied, layout = 0, 0
+    n0 = doc.page_count
     items = a.get("changes", [])
+    acts = [c for c in items if c.get("kind") == "page"]
+    applied, warns, done = 0, [], []
+
+    # 1) metin değişiklikleri, karartma ve döndürme: özgün sayfa numaralarıyla
     for c in items:
         if c.get("kind", "text") != "text":
             continue
-        page = doc[int(c["page"])]
-        for r in page.search_for(c["find"]):
-            replace_phrase(page, r, c["find"], c["replace"])
-            applied += 1
-    groups, drop = [], set()
-    for c in items:
-        if c.get("kind") != "page":
-            continue
-        pages = [int(p) for p in c["pages"] if 0 <= int(p) < doc.page_count]
+        for p in (range(n0) if c.get("all") else [int(c["page"])]):
+            k, w = replace_text(doc[p], c["find"], c["replace"])
+            applied += k
+            warns += [f"s. {p + 1}: {x}" for x in w]
+    if applied:
+        done.append(f"{applied} yerde metin değişti")
+    red = [{"text": c["text"], "page": p} for c in acts if c["action"] == "redact" for p in (c["pages"] or range(n0))]
+    if red:
+        k = apply_redactions(doc, red)
+        if k:
+            done.append(f"{k} alan karartıldı")
+    for c in acts:
         if c["action"] == "rotate":
-            for p in pages:
+            for p in c["pages"]:
                 doc[p].set_rotation((doc[p].rotation + int(c.get("angle") or 90)) % 360)
-        elif c["action"] == "delete":
-            drop |= set(pages)
-        elif c["action"] == "fit_one_page" and len(pages) > 1:
-            groups.append(pages)
-        layout += 1
-    if not applied and not layout:
-        raise UserError("Değiştirilecek metin belgede bulunamadı.")
-    if len(drop) >= doc.page_count:
+            done.append(f"{len(c['pages'])} sayfa döndürüldü")
+
+    # 2) sayfa yapısı: sığdırma ve silme yeni belge üretir; sonraki işlemler özgün numaralardan yeni sıraya eşlenir
+    groups = [c["pages"] for c in acts if c["action"] == "fit_one_page" and len(c["pages"]) > 1]
+    drop = {p for c in acts if c["action"] == "delete" for p in c["pages"]}
+    if len(drop) >= n0:
         raise UserError("Bütün sayfalar silinemez.")
+    owner = {p: p for p in range(n0)}
+    for g in groups:
+        for p in g:
+            owner[p] = g[0]
+    skip = {p for g in groups for p in g[1:]} | drop
+    ids = [p for p in range(n0) if p not in skip]
+    draft = _Draft(doc)
     if groups or drop:
         fix_fonts(doc)
-        out = fit_groups(doc, groups, drop)
-        s.replace_with(out.tobytes(garbage=3, deflate=True))
+        scales = []
+        draft.doc = fit_groups(doc, groups, drop, scales=scales)
+        if groups:
+            done.append(f"{len(groups)} parça tek sayfaya sığdırıldı")
+            warns.append(small_fit_warning(scales).replace(" Dikkat: ", "").strip())
+        if drop:
+            done.append(f"{len(drop)} sayfa silindi")
+
+    def cur(p):
+        o = owner.get(p, p)
+        return ids.index(o) if o in ids else None
+
+    def cur_pages(pages):
+        out = [cur(p) for p in pages] if pages else range(draft.doc.page_count)
+        return sorted({p for p in out if p is not None})
+
+    for c in acts:
+        if c["action"] == "reorder":
+            order = list(dict.fromkeys(i for i in (cur(p) for p in c["pages"]) if i is not None))
+            order += [i for i in range(len(ids)) if i not in order]
+            draft.doc.select(order)
+            ids = [ids[i] for i in order]
+            done.append("sayfa sırası değişti")
+    for c in acts:
+        if c["action"] == "insert_blank":
+            added = 0
+            for p in sorted(c["pages"], reverse=True):
+                pos = 0 if p < 0 else (cur(p) + 1 if cur(p) is not None else None)
+                if pos is None:
+                    continue
+                ref = draft.doc[min(max(pos - 1, 0), draft.doc.page_count - 1)].rect
+                draft.doc.new_page(pos, width=ref.width, height=ref.height)
+                ids.insert(pos, None)
+                added += 1
+            if added:
+                done.append(f"{added} boş sayfa eklendi")
+
+    # 3) son belgenin üzerine yazılanlar
+    for c in acts:
+        act, pos = c["action"], c.get("position") or ""
+        if act == "page_numbers":
+            op_page_numbers(draft, {"pages": cur_pages(c["pages"]), "format": c["text"] or "{n} / {total}",
+                                    "position": pos if pos in POSITIONS[1:] else "bottom-center"}, job)
+            done.append("sayfa numaraları eklendi")
+        elif act in ("header", "footer"):
+            align = pos.split("-")[-1] if pos else "center"
+            op_header_footer(draft, {act: c["text"], "align": align if align in ("left", "center", "right") else "center"}, job)
+            done.append("üst bilgi eklendi" if act == "header" else "alt bilgi eklendi")
+        elif act == "watermark":
+            op_watermark(draft, {"text": c["text"], "pages": cur_pages(c["pages"])}, job)
+            done.append("filigran eklendi")
+        elif act == "highlight":
+            k = 0
+            for p in cur_pages(c["pages"]):
+                page = draft.doc[p]
+                hits = page.search_for(c["text"])
+                if hits:
+                    page.add_highlight_annot(hits).update()
+                    k += 1
+            if k:
+                done.append(f"«{c['text'][:30]}» {k} sayfada vurgulandı")
+    if any(c["action"] == "resize_a4" for c in acts):
+        op_resize(draft, {"size": "A4"}, job)
+        done.append("sayfalar A4 oldu")
+    compress = any(c["action"] == "compress" for c in acts)
+    if compress:
+        draft.doc.rewrite_images(dpi_threshold=150, dpi_target=110, quality=65)
+        done.append("dosya sıkıştırıldı")
+
+    warns = [w for w in warns if w]
+    if not done:
+        raise UserError("Değiştirilecek metin belgede bulunamadı." + (" " + warns[0] + "." if warns else ""))
+    if draft.doc is not doc or compress:
+        fix_fonts(draft.doc)
+        s.replace_with(draft.doc.tobytes(garbage=4 if compress else 3, deflate=True))
     else:
         s.commit()
-    parts = []
-    if applied:
-        parts.append(f"{applied} yerde metin değişti")
-    if groups:
-        parts.append(f"{len(groups)} parça tek sayfaya sığdırıldı")
-    if drop:
-        parts.append(f"{len(drop)} sayfa silindi")
-    return {"changed": True, "message": ", ".join(parts).capitalize() + "." if parts else "Uygulandı."}
+    msg = ", ".join(done)
+    msg = msg[0].upper() + msg[1:] + "."
+    if warns:
+        msg += " Dikkat: " + "; ".join(warns[:4]) + "."
+    return {"changed": True, "message": msg}
 
 
 # ---------------------------------------------------------------- çeviri (düzeni koruyarak)

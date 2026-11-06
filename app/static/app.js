@@ -294,7 +294,7 @@ const pagesField = (value = "") => ({ id: "pages", label: "Sayfalar", value, pla
 
 // Düzenle
 tool("edit_text", "edit", "Metni düzenle", "Bir satıra tıkla, yerinde değiştir", "edit", () => setMode("edittext"), { kw: "yazı değiştir düzelt" });
-tool("command_edit", "edit", "Komutla düzenle", "“2025’leri 2026 yap”, “her CV tek sayfa olsun” gibi yaz, önizle, onayla", "cmd", commandEdit, { ai: true, kw: "bul değiştir" });
+tool("command_edit", "edit", "Komutla düzenle", "“2025’leri 2026 yap”, “her CV tek sayfa olsun”, “sayfa numarası ekle” gibi yaz, önizle, onayla", "cmd", commandEdit, { ai: true, kw: "bul değiştir" });
 tool("rewrite", "edit", "Yeniden yaz", "Seçili metni resmî, sade, kısa ya da uzun yap", "wand", () => S.selection ? rewriteSelection() : setMode("select", { hint: "Önce yeniden yazılacak metni sürükleyerek seç, sonra çıkan çubuktan “Yeniden yaz”a bas." }), { ai: true });
 tool("add_image", "edit", "Görsel ekle", "Resim ya da logo yerleştir", "image", () => setMode("image"), { kw: "resim logo" });
 tool("edit_images", "edit", "Görseli değiştir ya da sil", "Sayfadaki bir resme tıkla", "image", () => setMode("imgedit"), { kw: "resim" });
@@ -552,7 +552,7 @@ async function fixPhotos() {
   if (v && await guardDirty()) run("fix_photos", v, { label: "Fotoğraflar düzeltiliyor" });
 }
 async function commandEdit() {
-  const v = await dialog({ title: "Komutla düzenle", desc: `${SPARK()} Ne değişsin, yaz. Claude değişiklikleri hazırlar; önce sen görürsün.`, fields: [{ id: "instruction", label: "Komut", type: "textarea", placeholder: "örn. Tüm 2025 tarihlerini 2026 yap. · Her CV tek sayfaya sığsın. · Boş sayfaları sil." }], ok: "Hazırla" });
+  const v = await dialog({ title: "Komutla düzenle", desc: `${SPARK()} Ne değişsin, yaz. Claude değişiklikleri hazırlar; önce sen görürsün.`, fields: [{ id: "instruction", label: "Komut", type: "textarea", placeholder: "örn. Tüm 2025 tarihlerini 2026 yap. · Her CV tek sayfaya sığsın. · Özet paragrafını daha resmî yaz. · Sayfaları isme göre sırala, sayfa numarası ekle. · Telefon numaralarını karart." }], ok: "Hazırla" });
   if (!v || !v.instruction) return;
   const r = await run("ai_command", v, { label: "Değişiklikler hazırlanıyor", raw: true });
   if (r) { S.changes = r.changes.map((c) => ({ ...c, on: c.found > 0 })); showPanel({ kind: "changes", note: r.note }); }
@@ -1348,9 +1348,9 @@ function renderChanges(P) {
     el("div", { class: "p-body" }, list.length ? list.map((c) => el("label", { class: "list-item" },
       el("input", { type: "checkbox", checked: c.on, disabled: !c.found, onchange: (e) => { c.on = e.target.checked; } }),
       c.kind === "page"
-        ? el("div", { class: "grow" }, el("div", { html: `<b>${esc(c.label)}</b>` }), el("small", {}, c.reason))
-        : el("div", { class: "grow" }, el("div", { html: `<del>${esc(c.find)}</del> → <ins>${esc(c.replace)}</ins>` }),
-          el("small", {}, `s. ${c.page + 1} · ${c.reason}${c.found ? "" : " · belgede bulunamadı"}`)),
+        ? el("div", { class: "grow" }, el("div", { html: `<b>${esc(c.label)}</b>` }), el("small", {}, c.reason + (c.found ? "" : " · belgede bulunamadı")))
+        : el("div", { class: "grow" }, el("div", { html: `<del>${esc(c.find)}</del> → <ins>${esc(c.replace).replace(/\n/g, "<br>")}</ins>` }),
+          el("small", {}, `s. ${c.page + 1}${c.all ? " ve diğer sayfalar" : ""} · ${c.reason}${c.found > 1 ? ` · ${c.found} yerde` : ""}${c.found ? "" : c.scanned ? " · taranmış sayfa, önce Aranabilir PDF yap" : " · belgede bulunamadı"}`)),
       el("button", { class: "icon-btn", "aria-label": "Göster", html: icon("search", 14), onclick: async (e) => { e.preventDefault(); scrollToPage(c.page); if (c.kind === "page") return; const r = await run("search", { query: c.find }, { raw: true }); flashRects(c.page, (r?.hits || []).filter((h) => h.page === c.page).map((h) => h.rect)); } })))
       : el("p", { class: "hint" }, "Değişiklik önerilmedi.")),
     el("div", { class: "p-foot" }, el("button", { class: "btn primary", disabled: !list.some((c) => c.on), onclick: async () => { await run("apply_changes", { changes: list.filter((c) => c.on) }); showPanel({ kind: "tools" }); } }, "Seçilenleri uygula"),
