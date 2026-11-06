@@ -47,7 +47,7 @@ Kısayollar: `Ctrl K` araç ara, `Ctrl F` belgede ara, `Ctrl S` kaydet, `Ctrl Z`
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\pip install pymupdf anthropic keyring python-docx openpyxl python-pptx pywin32 pillow opencv-python-headless pyhanko pyinstaller
+.venv\Scripts\pip install pymupdf anthropic keyring python-docx openpyxl python-pptx pywin32 pillow opencv-python-headless pyhanko psutil pyinstaller
 .venv\Scripts\python app\main.py          # geliştirme
 powershell -ExecutionPolicy Bypass -File build.ps1   # kurulum dosyası (Inno Setup gerekir)
 ```

@@ -172,10 +172,64 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, {"error": core.friendly_error(e)})
 
 
+def _edge_windows(profile):
+    """Bu profili kullanan Edge ana süreçleri ve açtıkları uygulama adresleri."""
+    import psutil
+    out = []
+    key = f"--user-data-dir={profile}".lower()
+    for p in psutil.process_iter(["name", "cmdline"]):
+        try:
+            if (p.info["name"] or "").lower() != "msedge.exe":
+                continue
+            cmd = p.info["cmdline"] or []
+            if any(c.lower() == key for c in cmd):
+                app = next((c[6:] for c in cmd if c.startswith("--app=")), None)
+                if app:
+                    out.append((p, app))
+        except (psutil.Error, OSError):
+            continue
+    return out
+
+
+def _alive(url):
+    import urllib.request
+    q = parse_qs(urlparse(url).query)
+    try:
+        req = urllib.request.Request(url.split("?")[0].rstrip("/") + "/api/ping", headers={"X-Token": q.get("t", [""])[0]})
+        with urllib.request.urlopen(req, timeout=1.5) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def pick_profile():
+    """Kapanmadan kalmış (sunucusu ölü) pencereleri kapatır; başka bir açık PDF Stüdyo varsa ayrı profil seçer."""
+    import psutil
+    for n in range(1, 6):
+        profile = os.path.join(DATA_DIR, "pencere" if n == 1 else f"pencere{n}")
+        busy = False
+        for proc, app in _edge_windows(profile):
+            if _alive(app):
+                busy = True
+                continue
+            try:
+                for ch in proc.children(recursive=True):
+                    ch.kill()
+                proc.kill()
+            except psutil.Error:
+                pass
+        if not busy:
+            return profile
+    return os.path.join(DATA_DIR, f"pencere_{os.getpid()}")
+
+
 def launch_window(url):
-    profile = os.path.join(DATA_DIR, "pencere")
+    profile = pick_profile()
+    # Uygulama penceresinin kendi Edge profili: Microsoft hesabıyla otomatik oturum açma ve eşitleme kapalı.
     args = [find_edge(), f"--app={url}", f"--user-data-dir={profile}", "--no-first-run",
-            "--no-default-browser-check", "--disable-features=Translate,msEdgeSidebarV2,msHubApps",
+            "--no-default-browser-check", "--disable-sync", "--disable-background-networking",
+            "--disable-features=Translate,msEdgeSidebarV2,msHubApps,msImplicitSignin,msEdgeSyncConsent,"
+            "msEdgeSignInFRE,msShowSignInFlyout,msEdgeAutoSignIn,msSignInPromo,SigninInterception",
             "--window-size=1440,920", "--lang=tr"]
     return subprocess.Popen(args)
 
