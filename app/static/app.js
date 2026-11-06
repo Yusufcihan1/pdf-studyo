@@ -1616,6 +1616,7 @@ async function moreMenu() {
     S.info.open ? ["Belgede ara (Ctrl F)", "search", openFind] : null,
     S.info.open ? ["Belgeyi kapat", "close", async () => { if (await guardDirty()) { await post("/api/close_doc"); S.info = { open: false }; refresh(); } }] : null,
     ["Ayarlar ve API anahtarı", "key", () => openSettings()],
+    [`Güncellemeleri denetle (sürüm ${S.info.version_app || ""})`, "upload", () => checkUpdate(true)],
   ].filter(Boolean);
   const body = el("div", { style: { display: "flex", flexDirection: "column", gap: "2px" } });
   const p = dialog({ title: "Menü", body, ok: null, cancel: "Kapat" });
@@ -1646,10 +1647,20 @@ async function uploadFile(file) {
 
 /* ------------------------------------------------------------------ başlat */
 /* ------------------------------------------------------------------ güncelleme */
-async function checkUpdate() {
+async function checkUpdate(manual = false) {
+  const btn = $("#updateBtn");
+  if (manual && btn) { btn.disabled = true; btn.textContent = "Denetleniyor…"; }
   const r = await run("update_check", {}, { raw: true, quiet: true });
-  if (!r || !r.available) return;
-  toast(`PDF Stüdyo ${r.version} hazır (şu an ${r.current}).`, { sticky: true, acts: [["Güncelle", doUpdate], ["Sonra", () => {}]] });
+  if (btn) btn.disabled = false;
+  if (r) $("#versionText").textContent = `PDF Stüdyo ${r.current}`;
+  if (!r || !r.available) {
+    if (btn) btn.textContent = "Güncellemeleri denetle";
+    if (manual) toast(r ? `En son sürümü kullanıyorsun (${r.current}).` : "Güncelleme sitesine ulaşılamadı. İnternet bağlantını kontrol et.", { error: !r });
+    return;
+  }
+  if (btn) { btn.textContent = `${r.version} sürümüne güncelle`; btn.classList.add("primary"); btn.onclick = doUpdate; }
+  if (!manual) toast(`PDF Stüdyo ${r.version} hazır (şu an ${r.current}).`, { sticky: true, acts: [["Güncelle", doUpdate], ["Sonra", () => {}]] });
+  else doUpdate();
 }
 
 async function doUpdate() {
@@ -1661,6 +1672,7 @@ async function doUpdate() {
 
 function init() {
   setTimeout(checkUpdate, 4000);
+  $("#updateBtn").onclick = () => checkUpdate(true);
   $("#homeBtn").innerHTML = icon("home");
   $("#paletteBtn").innerHTML = icon("search");
   $("#undoBtn").innerHTML = icon("undo");
