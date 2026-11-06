@@ -1131,7 +1131,7 @@ function toolButton(t) {
     el("span", { class: "txt" }, el("b", {}, t.name), el("small", {}, t.desc)));
 }
 function seg(options, value, onpick) {
-  return el("div", { class: "seg" }, options.map(([v, l]) => el("button", { class: v === value ? "on" : "", onclick: () => onpick(v) }, l)));
+  return el("div", { class: "seg" }, options.map(([v, l]) => el("button", { type: "button", class: v === value ? "on" : "", onclick: () => onpick(v) }, l)));
 }
 function swatches(colors, value, onpick) {
   return el("div", { class: "swatches" }, colors.map((c) => el("button", { class: "sw" + (c === value ? " on" : ""), style: { background: c }, "aria-label": c, onclick: () => onpick(c) })));
@@ -1581,10 +1581,24 @@ function openPalette() {
 function closePalette() { $("#palette")?.remove(); }
 
 /* ------------------------------------------------------------------ ayarlar */
+function applyTheme(t) {
+  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+}
 async function openSettings(needKey = false) {
   const st = await run("ai_key_status", {}, { raw: true }) || {};
   const prof = await http("/api/settings");
   const u = st.usage || {};
+  const themeSeg = seg([["system", "Sistem"], ["light", "Açık"], ["dark", "Koyu"]], prof.theme || "system", (t) => {
+    themeSeg.querySelectorAll("button").forEach((b, i) => b.classList.toggle("on", ["system", "light", "dark"][i] === t));
+    applyTheme(t);
+    post("/api/settings", { theme: t });
+  });
+  const defRow = el("div", { class: "row" });
+  const fillDef = (d) => defRow.replaceChildren(
+    d?.is_default ? el("span", { class: "badge ok" }, "Varsayılan: PDF Stüdyo") : el("span", { class: "badge" }, "Başka bir uygulama varsayılan"),
+    d?.is_default ? "" : el("button", { type: "button", class: "btn small", onclick: async () => { const r = await run("default_app_set", {}, { raw: true }); if (r) { toast(r.message); fillDef(r); } } }, "Varsayılan yap"));
+  fillDef(await run("default_app_status", {}, { raw: true }));
   const body = el("div", { style: { display: "flex", flexDirection: "column", gap: "14px" } },
     el("div", { class: "f" }, el("label", { for: "key" }, "Claude API anahtarı"),
       el("input", { class: "input", id: "key", type: "password", placeholder: st.set ? `Kayıtlı: ${st.hint}` : "sk-ant-…", autocomplete: "off" }),
@@ -1592,6 +1606,8 @@ async function openSettings(needKey = false) {
     el("div", { class: "f" }, el("label", { for: "prof" }, "Bilgilerim"),
       el("textarea", { class: "input", id: "prof", rows: 5, placeholder: "Form doldururken kullanılır. Örn.\nAd Soyad: …\nTC Kimlik: …\nAdres: …\nTelefon: …\nE-posta: …" }, prof.profile || ""),
       el("small", {}, "Yalnızca “Otomatik doldur” kullandığında Claude’a gönderilir.")),
+    el("div", { class: "f" }, el("label", {}, "Görünüm"), themeSeg),
+    el("div", { class: "f" }, el("label", {}, "Varsayılan PDF uygulaması"), defRow),
     el("div", { class: "hint", style: { padding: 0 } }, `Bu oturumda: ${u.calls || 0} Claude isteği · ${(u.input || 0).toLocaleString("tr-TR")} giriş + ${(u.output || 0).toLocaleString("tr-TR")} çıkış token · yaklaşık $${(u.cost || 0).toFixed(3)} (Sonnet 5.5 liste fiyatıyla)`),
     el("div", { class: "hint", style: { padding: 0 } }, `PDF Stüdyo ${S.info.version_app || ""} · Açık kaynak (AGPL): github.com/Yusufcihan1/pdf-studyo`));
   const v = await dialog({ title: needKey ? "Claude API anahtarı gerekli" : "Ayarlar", desc: needKey ? "Bu araç Claude kullanıyor. Kullanmak için kendi API anahtarını bir kez gir." : null, body, ok: "Kaydet",
@@ -1615,7 +1631,8 @@ async function moreMenu() {
     S.info.open ? ["Farklı kaydet…", "save", () => run("save", { as: true })] : null,
     S.info.open ? ["Belgede ara (Ctrl F)", "search", openFind] : null,
     S.info.open ? ["Belgeyi kapat", "close", async () => { if (await guardDirty()) { await post("/api/close_doc"); S.info = { open: false }; refresh(); } }] : null,
-    ["Ayarlar ve API anahtarı", "key", () => openSettings()],
+    ["Ayarlar, görünüm ve API anahtarı", "key", () => openSettings()],
+    ["Varsayılan PDF uygulaması yap", "file", async () => { const r = await run("default_app_set", {}, { raw: true }); if (r) toast(r.message); }],
     [`Güncellemeleri denetle (sürüm ${S.info.version_app || ""})`, "upload", () => checkUpdate(true)],
   ].filter(Boolean);
   const body = el("div", { style: { display: "flex", flexDirection: "column", gap: "2px" } });

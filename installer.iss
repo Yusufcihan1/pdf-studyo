@@ -1,6 +1,6 @@
 ﻿#define AppName "PDF Stüdyo"
 #define AppExe "PDF Studyo.exe"
-#define AppVersion "1.0.4"
+#define AppVersion "1.0.5"
 
 [Setup]
 AppId={{A8E5C0D2-7B41-4E9A-9F3D-5C2B8E1F4A70}
@@ -45,6 +45,12 @@ Root: HKA; Subkey: "Software\Classes\PDFStudyo.pdf\DefaultIcon"; ValueType: stri
 Root: HKA; Subkey: "Software\Classes\PDFStudyo.pdf\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""
 Root: HKA; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; ValueName: "PDFStudyo.pdf"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; ValueType: string; ValueName: ".pdf"; ValueData: ""; Flags: uninsdeletekey
+; Windows Ayarları > Varsayılan uygulamalar listesinde görünmesi için (seçimi kullanıcı yapar).
+Root: HKA; Subkey: "Software\PDFStudyo"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\PDFStudyo\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "{#AppName}"
+Root: HKA; Subkey: "Software\PDFStudyo\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "PDF görüntüleme, düzenleme ve Claude ile belge işleri"
+Root: HKA; Subkey: "Software\PDFStudyo\Capabilities\FileAssociations"; ValueType: string; ValueName: ".pdf"; ValueData: "PDFStudyo.pdf"
+Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "{#AppName}"; ValueData: "Software\PDFStudyo\Capabilities"; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent

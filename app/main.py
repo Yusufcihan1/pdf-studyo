@@ -39,10 +39,22 @@ def op_update_install(s, a, job):
     return {"message": f"{info['version']} kuruluyor; PDF Stüdyo birazdan yeniden açılacak."}
 
 
-OPS = {**LOCAL_OPS, **AI_OPS, **SIGN_OPS, "update_check": op_update_check, "update_install": op_update_install}
+def op_default_app_status(session, a, job):
+    import varsayilan
+    return varsayilan.status()
+
+
+def op_default_app_set(session, a, job):
+    import varsayilan
+    return varsayilan.make_default()
+
+
+OPS = {**LOCAL_OPS, **AI_OPS, **SIGN_OPS, "update_check": op_update_check, "update_install": op_update_install,
+       "default_app_status": op_default_app_status, "default_app_set": op_default_app_set}
 # Hızlı ve pencere açmayan işler istekte hemen yanıtlanır; gerisi arka plan işi olur.
 SYNC = {"words", "page_text", "undo", "redo", "annots", "fields", "page_images", "signatures", "delete_signature",
-        "ai_key_status", "cert_status", "access_check", "to_text_local", "search", "signature_png", "update_check"}
+        "ai_key_status", "cert_status", "access_check", "to_text_local", "search", "signature_png", "update_check",
+        "default_app_status", "default_app_set"}
 
 TOKEN = secrets.token_urlsafe(24)
 STATIC = resource("static")
@@ -102,7 +114,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"recent": items})
             if path == "/api/settings":
                 st = load_settings()
-                return self._send(200, {"profile": st.get("profile", "")})
+                return self._send(200, {"profile": st.get("profile", ""), "theme": st.get("theme", "system")})
             if path == "/api/ping":
                 LAST_PING[0] = time.time()
                 return self._send(200, {"ok": True})
@@ -123,7 +135,13 @@ class Handler(BaseHTTPRequestHandler):
         if ctype.startswith("text/") or ctype in ("application/javascript",):
             ctype += "; charset=utf-8"
         with open(full, "rb") as f:
-            self._send(200, f.read(), ctype)
+            data = f.read()
+        if path == "/index.html":
+            # Tema sayfa ilk çizilmeden uygulansın (açılışta açık-koyu yanıp sönmesin).
+            theme = load_settings().get("theme", "system")
+            if theme in ("light", "dark"):
+                data = data.replace(b'<html lang="tr">', f'<html lang="tr" data-theme="{theme}">'.encode(), 1)
+        self._send(200, data, ctype)
 
     # --- POST
     def do_POST(self):
@@ -167,6 +185,8 @@ class Handler(BaseHTTPRequestHandler):
                 st = load_settings()
                 if "profile" in req:
                     st["profile"] = req["profile"]
+                if req.get("theme") in ("system", "light", "dark"):
+                    st["theme"] = req["theme"]
                 save_settings(st)
                 return self._send(200, {"ok": True})
             if path == "/api/open_external":

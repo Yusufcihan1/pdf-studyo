@@ -13,7 +13,7 @@ import uuid
 import pymupdf
 
 APP_NAME = "PDF Stüdyo"
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.5"
 DATA_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), APP_NAME)
 SETTINGS_PATH = os.path.join(DATA_DIR, "ayarlar.json")
 SIGN_DIR = os.path.join(DATA_DIR, "imzalar")
