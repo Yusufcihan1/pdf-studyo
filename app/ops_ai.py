@@ -647,7 +647,10 @@ def op_ai_chat(s, a, job):
     else:
         s.chat.append({"role": "user", "content": question})
     system = ("You answer questions about the user's documents. Base answers only on the documents and cite them. "
-              "If the answer is not in the documents, say so plainly. Be concise. " + TR)
+              "If the answer is not in the documents, say so plainly. Be concise. "
+              "You cannot change the document from this chat. If the user asks for an edit (change text, make each "
+              "CV/item fit on one page, delete or rotate pages), say that 'Komutla düzenle' (Düzenle sekmesi) does it, "
+              "and give the exact command to paste there. Never claim you changed the document. " + TR)
     try:
         msg = call(system=system, messages=s.chat, effort="medium", job=job, label="Cevap yazılıyor")
     except Exception:
@@ -698,7 +701,12 @@ def op_ai_translate_text(s, a, job):
     return {"text": data["text"]}
 
 
-CHANGE_SCHEMA = S({"changes": arr(S({"page": INT, "find": STR, "replace": STR, "reason": STR})), "note": STR})
+CHANGE_SCHEMA = S({
+    "changes": arr(S({"page": INT, "find": STR, "replace": STR, "reason": STR})),
+    "page_actions": arr(S({"action": {"type": "string", "enum": ["fit_one_page", "delete", "rotate"]},
+                           "pages": arr(INT), "angle": INT, "reason": STR})),
+    "note": STR})
+ACTION_TR = {"fit_one_page": "Tek sayfaya sığdır", "delete": "Sil", "rotate": "Döndür"}
 
 
 def op_ai_command(s, a, job):
@@ -708,33 +716,84 @@ def op_ai_command(s, a, job):
         raise UserError("Ne yapılacağını yaz.")
     text = page_text_lines(doc, max_chars=600000)
     data = call([{"type": "text", "text":
-                  f"Document text by page:\n{text}\n\nUser instruction: {instruction}\n\n"
-                  "Turn the instruction into exact text replacements. Each change: page number, 'find' = text copied "
-                  "EXACTLY as it appears on that page within one line (short and unique enough to locate), 'replace' = "
-                  "new text. Only change what the instruction asks. reason: one short Turkish phrase. note: a short "
-                  "Turkish note if something could not be done, else \"\"."}],
+                  f"The document has {doc.page_count} pages. Document text by page:\n{text}\n\n"
+                  f"User instruction: {instruction}\n\n"
+                  "Turn the instruction into edits of two kinds:\n"
+                  "1) 'changes': exact text replacements. Each: page number, 'find' = text copied EXACTLY as it appears "
+                  "on that page within one line (short and unique enough to locate), 'replace' = new text.\n"
+                  "2) 'page_actions': layout operations on 1-based page numbers.\n"
+                  "   - fit_one_page: the listed consecutive pages are ONE item that overflowed (e.g. one CV, letter or "
+                  "form spread over 2+ pages); they are merged onto a single page, scaled down if needed. Work out where "
+                  "each item starts (a new name/title/header) and make one action per item that spans 2+ pages. "
+                  "Use this when the user wants things to fit on one page each.\n"
+                  "   - delete: remove the listed pages.\n"
+                  "   - rotate: rotate the listed pages by 'angle' (90, 180, 270).\n"
+                  "   'angle' is 0 for non-rotate actions.\n"
+                  "Only do what the instruction asks; leave a list empty when not needed. reason: one short Turkish "
+                  "phrase. note: a short Turkish note if part of the request cannot be done with these tools, else \"\"."}],
                 schema=CHANGE_SCHEMA, effort="high", job=job, label="Değişiklikler hazırlanıyor")
     changes = []
     for c in data["changes"]:
         p = c["page"] - 1
         if 0 <= p < doc.page_count:
             hits = doc[p].search_for(c["find"])
-            changes.append({**c, "page": p, "found": len(hits)})
+            changes.append({**c, "kind": "text", "page": p, "found": len(hits)})
+    for act in data.get("page_actions", []):
+        pages = sorted({p - 1 for p in act["pages"] if 1 <= p <= doc.page_count})
+        if not pages or (act["action"] == "fit_one_page" and len(pages) < 2):
+            continue
+        if act["action"] == "fit_one_page":
+            pages = list(range(pages[0], pages[-1] + 1))     # yalnız ardışık sayfalar birleşir
+        label = ACTION_TR[act["action"]] + (f" ({act['angle']}°)" if act["action"] == "rotate" else "")
+        rng = f"s. {pages[0] + 1}" + (f"–{pages[-1] + 1}" if len(pages) > 1 else "")
+        changes.append({"kind": "page", "action": act["action"], "pages": pages, "angle": act.get("angle", 0),
+                        "reason": act["reason"], "label": f"{label}: {rng}", "page": pages[0], "found": 1})
     return {"changes": changes, "note": data["note"]}
 
 
 def op_apply_changes(s, a, job):
+    from ops_local import fit_groups
     doc = s.require()
-    applied = 0
-    for c in a.get("changes", []):
+    applied, layout = 0, 0
+    items = a.get("changes", [])
+    for c in items:
+        if c.get("kind", "text") != "text":
+            continue
         page = doc[int(c["page"])]
         for r in page.search_for(c["find"]):
             replace_phrase(page, r, c["find"], c["replace"])
             applied += 1
-    if not applied:
+    groups, drop = [], set()
+    for c in items:
+        if c.get("kind") != "page":
+            continue
+        pages = [int(p) for p in c["pages"] if 0 <= int(p) < doc.page_count]
+        if c["action"] == "rotate":
+            for p in pages:
+                doc[p].set_rotation((doc[p].rotation + int(c.get("angle") or 90)) % 360)
+        elif c["action"] == "delete":
+            drop |= set(pages)
+        elif c["action"] == "fit_one_page" and len(pages) > 1:
+            groups.append(pages)
+        layout += 1
+    if not applied and not layout:
         raise UserError("Değiştirilecek metin belgede bulunamadı.")
-    s.commit()
-    return {"changed": True, "message": f"{applied} yerde değişiklik yapıldı."}
+    if len(drop) >= doc.page_count:
+        raise UserError("Bütün sayfalar silinemez.")
+    if groups or drop:
+        fix_fonts(doc)
+        out = fit_groups(doc, groups, drop)
+        s.replace_with(out.tobytes(garbage=3, deflate=True))
+    else:
+        s.commit()
+    parts = []
+    if applied:
+        parts.append(f"{applied} yerde metin değişti")
+    if groups:
+        parts.append(f"{len(groups)} parça tek sayfaya sığdırıldı")
+    if drop:
+        parts.append(f"{len(drop)} sayfa silindi")
+    return {"changed": True, "message": ", ".join(parts).capitalize() + "." if parts else "Uygulandı."}
 
 
 # ---------------------------------------------------------------- çeviri (düzeni koruyarak)

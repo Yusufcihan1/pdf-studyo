@@ -58,8 +58,9 @@ def fake_call(content=None, system="", schema=None, effort="medium", max_tokens=
         return {"items": [{"id": 0, "alt": "Turuncu daire"}]}
     if props == {"items"}:
         return {"items": [{"text": "12345678901", "page": 1, "type": "TC kimlik"}, {"text": "yok-boyle", "page": 1, "type": "x"}]}
-    if props == {"changes", "note"}:
-        return {"changes": [{"page": 1, "find": "on iki aylık", "replace": "yirmi dört aylık", "reason": "süre"}], "note": ""}
+    if props == {"changes", "page_actions", "note"}:
+        return {"changes": [{"page": 1, "find": "on iki aylık", "replace": "yirmi dört aylık", "reason": "süre"}],
+                "page_actions": [], "note": ""}
     if "values" in props and "doc_type" in props:
         return {"doc_type": "Sözleşme", "values": [{"name": "Kiracı", "value": "Ahmet Yılmaz"}, {"name": "Tutar", "value": "1.250,50"}]}
     if props == {"values"} and "Form fields" in json.dumps(content, ensure_ascii=False):

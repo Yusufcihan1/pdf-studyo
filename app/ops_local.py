@@ -330,6 +330,93 @@ def op_resize(s, a, job):
     return {"changed": True, "message": f"Sayfalar {a.get('size', 'A4')} boyutuna getirildi."}
 
 
+def content_box(page):
+    """Sayfada yazı ve görsellerin kapladığı alan (tam sayfa arka plan çizimleri sayılmaz)."""
+    area = page.rect
+    box = pymupdf.Rect()
+    for b in page.get_text("blocks"):
+        r = pymupdf.Rect(b[:4]) & area
+        if not r.is_empty and b[4].strip():
+            box |= r
+    for img in page.get_image_info():
+        r = pymupdf.Rect(img["bbox"]) & area
+        if not r.is_empty and r.get_area() < area.get_area() * 0.8:
+            box |= r
+    for d in page.get_drawings():
+        r = pymupdf.Rect(d["rect"]) & area
+        if not r.is_empty and r.get_area() < area.get_area() * 0.5 and r.height < area.height * 0.8:
+            box |= r
+    return box if not box.is_empty else pymupdf.Rect()
+
+
+def fit_groups(doc, groups, drop=()):
+    """Her sayfa grubunu tek sayfaya sığdırır: içerikler alt alta dizilir ve gerekirse orantılı küçültülür.
+    groups: 0 tabanlı sayfa numarası listeleri; listede olmayan sayfalar olduğu gibi kalır. drop: silinecekler."""
+    first_of = {g[0]: g for g in groups if g}
+    skip = {p for g in groups for p in g[1:]} | set(drop)
+    out = pymupdf.open()
+    for pno in range(doc.page_count):
+        if pno in skip:
+            continue
+        g = first_of.get(pno)
+        if not g or len(g) == 1:
+            out.insert_pdf(doc, from_page=pno, to_page=pno)
+            continue
+        base = doc[g[0]].rect
+        clips = []
+        for i, p in enumerate(g):
+            page = doc[p]
+            cb = content_box(page)
+            if cb.is_empty:
+                continue
+            # İlk sayfa üstten, son sayfa alttan doğal boşluğunu korur; aradakiler yalnız içerik kadar.
+            clip = pymupdf.Rect(page.rect.x0, page.rect.y0 if i == 0 else max(page.rect.y0, cb.y0 - 6),
+                                page.rect.x1, cb.y1 + 6 if i < len(g) - 1 else min(page.rect.y1, cb.y1 + 6))
+            clips.append((p, clip))
+        top_margin = max(18.0, min(36.0, content_box(doc[g[0]]).y0 if not content_box(doc[g[0]]).is_empty else 36.0))
+        bottom_margin = top_margin
+        avail_h = base.height - bottom_margin
+        total_h = sum(c.height for _, c in clips)
+        scale = min(1.0, avail_h / total_h) if total_h else 1.0
+        new = out.new_page(width=base.width, height=base.height)
+        width = base.width * scale
+        x0 = (base.width - width) / 2
+        y = 0.0
+        for p, clip in clips:
+            h = clip.height * scale
+            new.show_pdf_page(pymupdf.Rect(x0, y, x0 + width, y + h), doc, p, clip=clip, keep_proportion=False)
+            y += h
+    return out
+
+
+def parse_groups(text, n):
+    """'1-2, 3, 4-5' → [[0,1],[2],[3,4]]"""
+    groups = []
+    for part in re.split(r"[;,]", text or ""):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a_, b_ = part.split("-", 1)
+            g = list(range(int(a_) - 1, int(b_)))
+        else:
+            g = [int(part) - 1]
+        if not g or min(g) < 0 or max(g) >= n:
+            raise UserError(f"Geçersiz sayfa aralığı: {part}")
+        groups.append(g)
+    return groups
+
+
+def op_fit_one_page(s, a, job):
+    doc = s.require()
+    groups = a.get("groups")
+    if isinstance(groups, str) or groups is None:
+        groups = parse_groups(groups or f"1-{doc.page_count}", doc.page_count)
+    out = fit_groups(doc, groups)
+    s.replace_with(out.tobytes(garbage=3, deflate=True))
+    return {"changed": True, "message": f"{sum(1 for g in groups if len(g) > 1)} grup tek sayfaya sığdırıldı."}
+
+
 # ---------------------------------------------------------------- metin ve görsel düzenleme
 
 def _style_at(page, rect):
