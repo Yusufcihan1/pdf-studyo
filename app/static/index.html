@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Stüdyo</title>
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="top">
+  <div class="brand">
+    <button class="icon-btn" id="homeBtn" aria-label="Ana ekran" hidden></button>
+    <div class="logo" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/></svg></div>
+    <div class="docname"><b id="docTitle">PDF Stüdyo</b><small id="docSub"></small></div>
+  </div>
+  <nav class="tabs" id="tabs" aria-label="Araç grupları" hidden></nav>
+  <div class="actions">
+    <button class="icon-btn" id="paletteBtn" aria-label="Araç ara (Ctrl K)" title="Araç ara (Ctrl K)"></button>
+    <button class="icon-btn" id="undoBtn" aria-label="Geri al (Ctrl Z)" title="Geri al (Ctrl Z)" hidden></button>
+    <button class="icon-btn" id="redoBtn" aria-label="Yinele (Ctrl Y)" title="Yinele (Ctrl Y)" hidden></button>
+    <button class="btn ai" id="assistBtn" hidden></button>
+    <button class="btn primary" id="saveBtn" hidden>Kaydet</button>
+    <button class="icon-btn" id="moreBtn" aria-label="Diğer" title="Diğer"></button>
+  </div>
+</header>
+
+<main id="home">
+  <div class="home-in">
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <h1>Ne yapmak istiyorsun?</h1>
+      <button class="cmdbar" id="homeCmd"><span id="homeCmdIcon"></span><span>Bir araç ara ya da yaz: “Word’e çevir”, “karart”, “imzala”</span><kbd>Ctrl K</kbd></button>
+    </div>
+    <div class="drop" id="drop">
+      <div class="big" id="dropIcon"></div>
+      <h2>Dosyayı buraya bırak</h2>
+      <p>PDF, Word, Excel, PowerPoint ya da resim</p>
+      <button class="btn primary" id="openBtn" style="height:44px;padding:0 22px;margin-top:6px">Dosya seç</button>
+    </div>
+    <section style="display:flex;flex-direction:column;gap:12px">
+      <div class="sec-head"><h2>Sık kullanılanlar</h2><button class="linkbtn" id="allTools">Tüm araçlar →</button></div>
+      <div class="tiles" id="quickTiles"></div>
+    </section>
+    <section style="display:flex;flex-direction:column;gap:12px">
+      <div class="sec-head"><h2>Yeni oluştur</h2></div>
+      <div class="tiles" id="createTiles"></div>
+    </section>
+    <section style="display:flex;flex-direction:column;gap:12px">
+      <div class="sec-head"><h2>Son açılanlar</h2></div>
+      <div class="recent" id="recent"></div>
+    </section>
+  </div>
+</main>
+
+<main id="editor" hidden>
+  <aside id="thumbs" aria-label="Sayfalar"></aside>
+  <section id="center">
+    <div id="banner"></div>
+    <div id="findbar" hidden>
+      <input id="findInput" placeholder="Belgede ara" aria-label="Belgede ara">
+      <small id="findCount"></small>
+      <button class="icon-btn" id="findPrev" aria-label="Önceki"></button>
+      <button class="icon-btn" id="findNext" aria-label="Sonraki"></button>
+      <button class="icon-btn" id="findClose" aria-label="Kapat"></button>
+    </div>
+    <div id="pages" tabindex="0"></div>
+    <div id="zoombar">
+      <button class="icon-btn" id="zoomOut" aria-label="Uzaklaştır"></button>
+      <span id="zoomLabel">100%</span>
+      <button class="icon-btn" id="zoomIn" aria-label="Yakınlaştır"></button>
+      <button class="icon-btn" id="zoomFit" aria-label="Genişliğe sığdır" title="Genişliğe sığdır"></button>
+    </div>
+  </section>
+  <aside id="panel" aria-label="Araçlar"></aside>
+</main>
+
+<div id="minibar" hidden></div>
+<div id="toasts" aria-live="polite"></div>
+<div id="dropall" hidden>Bırak, açılsın</div>
+<script src="app.js"></script>
+</body>
+</html>
